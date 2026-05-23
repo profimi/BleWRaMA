@@ -4,6 +4,8 @@ Kotlin Android application that connects to an ESP32-C6 Supermini BLE beacon, se
 start/stop measurement commands, receives status notifications, and persists
 measurement data locally.
 
+(c) Professor & Claude, 2026-05.
+
 ---
 
 ## Project Structure
