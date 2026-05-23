@@ -1,0 +1,47 @@
+# Gradle files
+.gradle/
+build/
+app/build/
+
+# Local configuration file (contains SDK path)
+local.properties
+
+# Log/OS Files
+*.log
+.DS_Store
+
+# Android Studio / IntelliJ IDEA generated files
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/deploymentTargetDropDown.xml
+*.iml
+captures/
+
+# Built application files (APK, AAB)
+*.apk
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java/Kotlin class files
+*.class
+
+# Keystore files (Uncomment if you want to keep them local)
+# *.jks
+# *.keystore
+
+# Google Services (Firebase configuration)
+# Keep this if it's an open-source project; ignore if it contains secrets
+# google-services.json
+
+# External native build folder
+.externalNativeBuild/
+.cxx/
+
