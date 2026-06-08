@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_dark">
+
+    <!-- ── File selection bar ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:background="@color/card_bg">
+
+        <!-- Row 1: internal file picker -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="6dp">
+
+            <Spinner
+                android:id="@+id/spinnerFiles"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_spinner"
+                android:popupBackground="@color/card_bg" />
+
+            <Button
+                android:id="@+id/btnLoadInternal"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:text="Load"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp"
+                android:backgroundTint="@color/accent_blue"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp" />
+        </LinearLayout>
+
+        <!-- Row 2: external file picker -->
+        <Button
+            android:id="@+id/btnPickFile"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:text="📂  Open file from storage…"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:backgroundTint="@color/accent_orange" />
+    </LinearLayout>
+
+    <!-- ── File info ── -->
+    <TextView
+        android:id="@+id/tvFileInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="@color/text_secondary"
+        android:textSize="11sp"
+        android:fontFamily="monospace"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="2dp"
+        android:visibility="gone" />
+
+    <!-- ── Error ── -->
+    <TextView
+        android:id="@+id/tvError"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="@color/accent_red"
+        android:textSize="12sp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="4dp"
+        android:visibility="gone" />
+
+    <!-- ── Progress ── -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:indeterminate="true"
+        android:indeterminateTint="@color/accent_blue"
+        android:visibility="gone" />
+
+    <!-- ── Chart ── -->
+    <com.github.mikephil.charting.charts.LineChart
+        android:id="@+id/chart"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="4dp" />
+
+    <!-- ── Series toggles ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="@color/card_bg"
+        android:padding="10dp"
+        android:gravity="center">
+
+        <CheckBox
+            android:id="@+id/cbRaw"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Raw dist"
+            android:textColor="#4A9EFF"
+            android:buttonTint="#4A9EFF"
+            android:checked="true"
+            android:layout_marginEnd="8dp" />
+
+        <CheckBox
+            android:id="@+id/cbFiltered"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Filtered"
+            android:textColor="#2ECC71"
+            android:buttonTint="#2ECC71"
+            android:checked="true"
+            android:layout_marginEnd="8dp" />
+
+        <CheckBox
+            android:id="@+id/cbVariance"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Variance"
+            android:textColor="#E74C3C"
+            android:buttonTint="#E74C3C"
+            android:checked="true"
+            android:layout_marginEnd="8dp" />
+
+        <CheckBox
+            android:id="@+id/cbValidRatio"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Valid %"
+            android:textColor="#F1C40F"
+            android:buttonTint="#F1C40F"
+            android:checked="true" />
+    </LinearLayout>
+
+    <!-- ── X-axis label ── -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="X axis: time (×100 ms)   |   pinch/drag to zoom"
+        android:textColor="@color/text_secondary"
+        android:textSize="10sp"
+        android:gravity="center"
+        android:paddingBottom="4dp"
+        android:background="@color/card_bg" />
+
+</LinearLayout>

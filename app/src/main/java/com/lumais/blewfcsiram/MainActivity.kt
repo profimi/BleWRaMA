@@ -118,15 +118,15 @@ class MainActivity : AppCompatActivity() {
             refreshFileList()
         }
 
-        // Plot
+        // Opens PlotActivity, pre-loading the most recent stored file
         binding.btnPlot.setOnClickListener {
-//            // Plot only works on CSIB .bin files
-//            val binFiles = measurementRepository.listBinFiles()
-//            val intent = Intent(this, PlotActivity::class.java)
-//            binFiles.firstOrNull()?.let {
-//                intent.putExtra(PlotActivity.EXTRA_FILE_PATH, it.absolutePath)
-//            }
-//            startActivity(intent)
+            // Plot only works on CSIB .bin files
+            val binFiles = measurementRepository.listBinFiles()
+            val intent = Intent(this, PlotActivity::class.java)
+            binFiles.firstOrNull()?.let {
+                intent.putExtra(PlotActivity.EXTRA_FILE_PATH, it.absolutePath)
+            }
+            startActivity(intent)
         }
 
         binding.btnExportCsv.setOnClickListener { exportLastBinAsCsv() }
