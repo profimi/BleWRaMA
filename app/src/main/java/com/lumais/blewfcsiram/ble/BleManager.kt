@@ -37,7 +37,11 @@ class BleManager(
     private val onStateChanged: (BleState) -> Unit,
     private val onBeaconStatus: (BeaconStatus) -> Unit,
     private val onMeasurementData: (ByteArray) -> Unit,
-    private val onLog: (String) -> Unit
+    private val onLog: (String) -> Unit,
+    /** Called once per fully-received dat file: (fileId, rawBytes). */
+    private val onFileReceived: (fileId: Int, data: ByteArray) -> Unit = { _, _ -> },
+    /** Called when Stream_end is received (all files for this transfer done). */
+    private val onTransferComplete: () -> Unit = {},
 ) {
     companion object {
         const val CMD_START: Byte = 1
@@ -61,6 +65,8 @@ class BleManager(
         val CHAR_COMMAND_UUID: UUID = UUID.fromString("0000FF01-0000-1000-8000-00805F9B34FB")
         val CHAR_STATUS_UUID:  UUID = UUID.fromString("0000FF02-0000-1000-8000-00805F9B34FB")
         val CHAR_CONFIG_UUID:  UUID = UUID.fromString("0000FF03-0000-1000-8000-00805F9B34FB")
+        // Characteristic 0xFF04 — Data (Notify): delivers the framed file stream
+        val CHAR_DATA_UUID:    UUID = UUID.fromString("0000FF04-0000-1000-8000-00805F9B34FB")
         val CCCD_UUID:         UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
 
         private const val SCAN_TIMEOUT_MS   = 15_000L  // ms
@@ -103,14 +109,34 @@ class BleManager(
     private var commandChar: BluetoothGattCharacteristic? = null
     private var statusChar:  BluetoothGattCharacteristic? = null
     private var configChar:  BluetoothGattCharacteristic? = null
+    private var dataChar:    BluetoothGattCharacteristic? = null   // 0xFF04
 
     private var currentState     = BleState.DISCONNECTED
     private var lastBeaconStatus = BeaconStatus.IDLE
     private var connectRetries   = 0
     private var pendingDevice: BluetoothDevice? = null   // kept for retry
 
+    // ── Legacy measurement-buffer (kept for backwards compat) ─────────────────
     private val measurementBuffer = mutableListOf<ByteArray>()
     private var isCollecting = false
+
+    // ── File-stream parser ────────────────────────────────────────────────────
+    private val fileStreamParser = FileStreamParser(
+        onLog        = onLog,
+        onFileComplete = { fileId, data ->
+            onLog("📥 File $fileId complete (${data.size} B) — handing to repository")
+            onFileReceived(fileId, data)
+        },
+        onStreamEnd  = {
+            onLog("🏁 File transfer complete")
+            onTransferComplete()
+        }
+    )
+
+    // ── CCCD subscription sequencing ──────────────────────────────────────────
+    // We must write CCCDs one at a time and wait for onDescriptorWrite before
+    // writing the next one.  This queue holds pending (characteristic, cccd) pairs.
+    private val cccdQueue = ArrayDeque<Pair<BluetoothGattCharacteristic, BluetoothGattDescriptor>>()
 
     // ── Connect-timeout watchdog ──────────────────────────────────────────────
     // Android's connectGatt can hang silently at status 133 without ever
@@ -152,10 +178,10 @@ class BleManager(
 
         override fun onScanFailed(errorCode: Int) {
             val reason = when (errorCode) {
-                ScanCallback.SCAN_FAILED_ALREADY_STARTED          -> "ALREADY_STARTED"
+                ScanCallback.SCAN_FAILED_ALREADY_STARTED                 -> "ALREADY_STARTED"
                 ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> "APP_REG_FAILED"
-                ScanCallback.SCAN_FAILED_INTERNAL_ERROR            -> "INTERNAL_ERROR"
-                ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED       -> "UNSUPPORTED"
+                ScanCallback.SCAN_FAILED_INTERNAL_ERROR                  -> "INTERNAL_ERROR"
+                ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED             -> "UNSUPPORTED"
                 else -> "code=$errorCode"
             }
             onLog("❌ Scan failed: $reason")
@@ -170,6 +196,7 @@ class BleManager(
         setState(BleState.SCANNING)
         measurementBuffer.clear()
         isCollecting = false
+        fileStreamParser.reset()
 
         // ── FIX C: scan WITHOUT a service-UUID filter first ───────────────────
         // Many ESP32 firmwares advertise the 128-bit UUID only in the scan
@@ -235,7 +262,6 @@ class BleManager(
         // adapter has been toggled or if there was a previous failed GATT
         // session.  Fetching it fresh from getRemoteDevice() avoids this.
         val freshDevice = bluetoothAdapter?.getRemoteDevice(device.address) ?: device
-
         setState(BleState.CONNECTING)
         onLog("⏳ Connecting to ${freshDevice.address} (attempt ${connectRetries + 1}/$MAX_CONNECT_RETRIES)")
 
@@ -299,7 +325,7 @@ class BleManager(
                 BluetoothProfile.STATE_CONNECTING   -> "CONNECTING"
                 else -> "state=$newState"
             }
-            onLog("🔗 onConnectionStateChange: status=$statusName  newState=$stateName")
+            onLog("🔗 onConnectionStateChange: $statusName / $stateName")
 
             when {
                 newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS -> {
@@ -309,13 +335,11 @@ class BleManager(
                     // discoverServices is called from onMtuChanged.
                     g.requestMtu(REQUESTED_MTU)
                 }
-
                 newState == BluetoothProfile.STATE_DISCONNECTED && status == BluetoothGatt.GATT_SUCCESS -> {
                     onLog("🔌 Clean disconnect")
                     cleanup()
                     setState(BleState.DISCONNECTED)
                 }
-
                 newState == BluetoothProfile.STATE_DISCONNECTED -> {
                     // status != SUCCESS means the connection was lost abnormally
                     onLog("⚠ Disconnected with error: $statusName")
@@ -324,15 +348,11 @@ class BleManager(
                     // status=8: GATT_CONN_TIMEOUT
                     // status=19: GATT_CONN_TERMINATE_PEER_USER (peer closed)
                     // "failed to establish" — retry automatically
-                    if (status == 133 || status == 8 || status == 34) {
-                        retryOrFail()
-                    } else {
-                        setState(BleState.ERROR)
-                    }
+                    if (status == 133 || status == 8 || status == 34) retryOrFail()
+                    else setState(BleState.ERROR)
                 }
-
                 else -> {
-                    onLog("⚠ Unexpected GATT state: status=$statusName newState=$stateName")
+                    onLog("⚠ Unexpected GATT state: $statusName / $stateName")
                     cleanup()
                     retryOrFail()
                 }
@@ -342,17 +362,14 @@ class BleManager(
         // Step 2 — MTU result; now safe to discover services
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                onLog("📐 MTU=$mtu bytes")
-            } else {
-                onLog("⚠ MTU negotiation failed (status=$status) — using default 23 B")
-            }
+            if (status == BluetoothGatt.GATT_SUCCESS) onLog("📐 MTU=$mtu bytes")
+            else onLog("⚠ MTU negotiation failed (status=$status) — using default")
             // Proceed with service discovery regardless
             onLog("🔎 Discovering services…")
             g.discoverServices()
         }
 
-        // Step 3 — services available; resolve characteristics
+        // Step 3 — services available; resolve characteristics and queue CCCD writes
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -366,18 +383,17 @@ class BleManager(
                 return
             }
 
-            // Diagnostic dump — compare with nRF Connect output
+            // Diagnostic dump
             onLog("── Discovered ${g.services.size} service(s) ──")
             g.services.forEach { svc ->
-                val match = if (svc.uuid == SERVICE_UUID.reverseEndianness()) " ← TARGET" else ""
-                onLog("  SVC ${svc.uuid}$match")
+                onLog("  SVC ${svc.uuid}${if (svc.uuid == SERVICE_UUID.reverseEndianness()) " ← TARGET" else ""}")
                 svc.characteristics.forEach { ch ->
                     val props = buildString {
-                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0)             append("READ ")
-                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)            append("WRITE ")
+                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0)              append("READ ")
+                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)             append("WRITE ")
                         if (ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) append("WRITE_NR ")
-                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)           append("NOTIFY ")
-                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)         append("INDICATE ")
+                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)            append("NOTIFY ")
+                        if (ch.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)          append("INDICATE ")
                     }.trim()
                     onLog("    CHAR ${ch.uuid}  [$props]")
                 }
@@ -392,14 +408,16 @@ class BleManager(
                 return
             }
 
-            // ── Resolve all three characteristics ──────────────────
+            // ── Resolve all characteristics ──────────────────
             commandChar = service.getCharacteristic(CHAR_COMMAND_UUID)
             statusChar  = service.getCharacteristic(CHAR_STATUS_UUID)
             configChar  = service.getCharacteristic(CHAR_CONFIG_UUID)
+            dataChar    = service.getCharacteristic(CHAR_DATA_UUID)
 
             onLog("CMD  (FF01): ${if (commandChar != null) "✅" else "❌ missing"}")
             onLog("STAT (FF02): ${if (statusChar  != null) "✅" else "❌ missing"}")
             onLog("CFG  (FF03): ${if (configChar  != null) "✅" else "⚠ absent (optional)"}")
+            onLog("DATA (FF04): ${if (dataChar    != null) "✅" else "⚠ absent (file transfer unavailable)"}")
 
             if (commandChar == null || statusChar == null) {
                 onLog("❌ Required characteristics missing")
@@ -407,44 +425,42 @@ class BleManager(
                 return
             }
 
-            // ── CCCD subscription ──────────────────────────────────
-            // Enable local notification routing
-            g.setCharacteristicNotification(statusChar, true)
+            // ── Build CCCD subscription queue ─────────────────────────────────
+            // Android GATT is single-operation: queue all (char, cccd) pairs and
+            // drain them one at a time via onDescriptorWrite.
+            cccdQueue.clear()
 
-            // Write CCCD on the peripheral (sequenced via onDescriptorWrite)
-            // to actually start sending notifications over the air
-            val cccd = statusChar!!.getDescriptor(CCCD_UUID)
-            if (cccd == null) {
-                onLog("⚠ CCCD descriptor absent — polling only")
-                // Still try to read the initial value
-                g.readCharacteristic(statusChar)
-                return
+            fun enqueue(char: BluetoothGattCharacteristic?) {
+                if (char == null) return
+                val cccd = char.getDescriptor(CCCD_UUID) ?: return
+                g.setCharacteristicNotification(char, true)
+                cccdQueue.addLast(char to cccd)
             }
 
-            val enableBytes = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeDescriptor(cccd, enableBytes)
-            } else {
-                @Suppress("DEPRECATION")
-                cccd.value = enableBytes
-                @Suppress("DEPRECATION")
-                g.writeDescriptor(cccd)
-            }
+            enqueue(statusChar)   // FF02 — must subscribe first
+            enqueue(dataChar)     // FF04 — file-transfer notifications
+
+            drainCccdQueue(g)
         }
 
+        // Step 4 — each CCCD write completes → write next, or read initial status
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onDescriptorWrite(
             g: BluetoothGatt,
             descriptor: BluetoothGattDescriptor,
             status: Int
         ) {
-            if (descriptor.uuid == CCCD_UUID) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    onLog("🔔 Notifications enabled (FF02 CCCD written)")
-                } else {
-                    onLog("⚠ CCCD write failed: status=${gattStatusName(status)}")
-                }
-                // Initial status read — sequenced after CCCD write completes
+            val charUuid = descriptor.characteristic.uuid
+            if (status == BluetoothGatt.GATT_SUCCESS)
+                onLog("🔔 CCCD enabled: $charUuid")
+            else
+                onLog("⚠ CCCD write failed for $charUuid  status=${gattStatusName(status)}")
+
+            if (cccdQueue.isNotEmpty()) {
+                // More CCCDs to write — continue draining
+                drainCccdQueue(g)
+            } else {
+                // All CCCDs written — read initial status value
                 g.readCharacteristic(statusChar)
             }
         }
@@ -477,16 +493,18 @@ class BleManager(
             }
         }
 
-        // Ongoing STATUS notifications
+        // ── Ongoing notifications ─────────────────────────────────────────────
         @Deprecated("Deprecated in API 33")
         override fun onCharacteristicChanged(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            if (characteristic.uuid == CHAR_STATUS_UUID) {
-                @Suppress("DEPRECATION")
-                handleStatusUpdate(characteristic.value)
-            }
+            // if (characteristic.uuid == CHAR_STATUS_UUID) {
+            //     @Suppress("DEPRECATION")
+            //     handleStatusUpdate(characteristic.value)
+            // }
+            @Suppress("DEPRECATION")
+            dispatchNotification(characteristic.uuid, characteristic.value ?: return)
         }
 
         override fun onCharacteristicChanged(
@@ -494,7 +512,8 @@ class BleManager(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
-            if (characteristic.uuid == CHAR_STATUS_UUID) handleStatusUpdate(value)
+            // if (characteristic.uuid == CHAR_STATUS_UUID) handleStatusUpdate(value)
+            dispatchNotification(characteristic.uuid, value)
         }
 
         override fun onCharacteristicWrite(
@@ -512,6 +531,33 @@ class BleManager(
         }
     }
 
+    // ── Notification dispatch ─────────────────────────────────────────────────
+
+    private fun dispatchNotification(uuid: UUID, value: ByteArray) {
+        when (uuid) {
+            CHAR_STATUS_UUID -> handleStatusUpdate(value)
+            CHAR_DATA_UUID   -> {
+                onLog("📡 Data notification: ${value.size} B")
+                fileStreamParser.feed(value)
+            }
+        }
+    }
+
+    // ── CCCD queue drain ──────────────────────────────────────────────────────
+
+    private fun drainCccdQueue(g: BluetoothGatt) {
+        val (_, cccd) = cccdQueue.removeFirst()
+        val enableBytes = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(cccd, enableBytes)
+        } else {
+            @Suppress("DEPRECATION")
+            cccd.value = enableBytes
+            @Suppress("DEPRECATION")
+            g.writeDescriptor(cccd)
+        }
+    }
+
     // ── GATT cache refresh (reflection) ───────────────────────────────────────
     // Android caches GATT service tables across connections.  If the firmware
     // was updated or the bond was cleared on the peripheral side, the cache
@@ -520,8 +566,7 @@ class BleManager(
     // hidden API accessible via reflection.
     private fun refreshGattCache(g: BluetoothGatt) {
         try {
-            val refresh = g.javaClass.getMethod("refresh")
-            val result  = refresh.invoke(g) as? Boolean
+            val result = g.javaClass.getMethod("refresh").invoke(g) as? Boolean
             onLog("🧹 GATT cache refresh: $result")
         } catch (e: Exception) {
             onLog("⚠ GATT cache refresh unavailable: ${e.message}")
@@ -556,6 +601,8 @@ class BleManager(
     fun sendCommand(cmd: Byte) {
         val g    = gatt        ?: run { onLog("❌ Not connected"); return }
         val char = commandChar ?: run { onLog("❌ CMD char not ready"); return }
+        // Reset parser state whenever a new Stop command is issued
+        if (cmd == CMD_STOP) fileStreamParser.reset()
         writeChar(g, char, byteArrayOf(cmd))
     }
 
@@ -625,10 +672,13 @@ class BleManager(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun cleanup() {
         mainHandler.removeCallbacks(connectTimeoutRunnable)
+        cccdQueue.clear()
         commandChar = null
         statusChar  = null
         configChar  = null
+        dataChar = null
         if (isCollecting) finalizeMeasurement()
+        fileStreamParser.reset()
         gatt?.close()
         gatt = null
     }

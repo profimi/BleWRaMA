@@ -3,16 +3,21 @@ package com.lumais.blewfcsiram
 import android.Manifest
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.Toast
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.lumais.blewfcsiram.databinding.ActivityMainBinding
 import com.lumais.blewfcsiram.ble.BleManager
 import com.lumais.blewfcsiram.ble.BleState
@@ -45,9 +50,8 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.values.all { it }) {
-            initializeBle()
-        } else {
+        if (permissions.values.all { it }) initializeBle()
+        else {
             showLog("❌ Bluetooth permissions denied.")
             updateUiForState(BleState.DISCONNECTED)
         }
@@ -56,11 +60,8 @@ class MainActivity : AppCompatActivity() {
     private val enableBluetoothLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            startScanning()
-        } else {
-            showLog("❌ Bluetooth not enabled.")
-        }
+        if (result.resultCode == RESULT_OK) startScanning()
+        else showLog("❌ Bluetooth not enabled.")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,77 +70,172 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         measurementRepository = MeasurementRepository(this)
-        bleManager = BleManager(this, ::onBleStateChanged, ::onBeaconStatusChanged, ::onMeasurementDataReceived, ::showLog)
+        bleManager = BleManager(
+            context             = this,
+            onStateChanged      = ::onBleStateChanged,
+            onBeaconStatus      = ::onBeaconStatusChanged,
+            onMeasurementData   = ::onMeasurementDataReceived,
+            onLog               = ::showLog,
+            // ── File-stream callbacks ──────────────────────────────────────────
+            onFileReceived      = ::onDatFileReceived,
+            onTransferComplete  = ::onTransferComplete,
+        )
 
         setupUI()
         checkPermissionsAndInit()
         refreshFileList()
     }
 
+    // ── UI wiring ─────────────────────────────────────────────────────────────
+
     private fun setupUI() {
+        // Connection
         binding.btnScan.setOnClickListener {
-            if (bleManager.isConnected()) {
-                bleManager.disconnect()
-            } else {
-                checkPermissionsAndInit()
-            }
+            if (bleManager.isConnected()) bleManager.disconnect()
+            else checkPermissionsAndInit()
         }
 
+        // Measurement control
         binding.btnStartMeasurement.setOnClickListener {
             bleManager.sendCommand(BleManager.CMD_START)
             showLog("▶ Start measurement sent")
         }
-
         binding.btnStopMeasurement.setOnClickListener {
             bleManager.sendCommand(BleManager.CMD_STOP)
             showLog("■ Stop measurement sent")
         }
 
+        // File management
         binding.btnDeleteLastFile.setOnClickListener {
-            val deleted = measurementRepository.deleteLastFile()
-            if (deleted) {
-                showLog("🗑 Last measurement file deleted")
+            if (measurementRepository.deleteLastFile()) {
+                showLog("🗑 Last file deleted")
                 refreshFileList()
-            } else {
-                showLog("⚠ No files to delete")
-            }
+            } else showLog("⚠ No files to delete")
         }
-
         binding.btnDeleteAllFiles.setOnClickListener {
             val count = measurementRepository.deleteAllFiles()
-            showLog("🗑 Deleted $count measurement file(s)")
+            showLog("🗑 Deleted $count file(s)")
             refreshFileList()
+        }
+
+        // Plot
+        binding.btnPlot.setOnClickListener {
+//            // Plot only works on CSIB .bin files
+//            val binFiles = measurementRepository.listBinFiles()
+//            val intent = Intent(this, PlotActivity::class.java)
+//            binFiles.firstOrNull()?.let {
+//                intent.putExtra(PlotActivity.EXTRA_FILE_PATH, it.absolutePath)
+//            }
+//            startActivity(intent)
+        }
+
+        binding.btnExportCsv.setOnClickListener { exportLastBinAsCsv() }
+
+        // Long-press event log to copy to clipboard
+        binding.tvLog.setOnLongClickListener {
+            val text = binding.tvLog.text.toString()
+            if (text.isBlank()) {
+                Toast.makeText(this, "Log is empty", Toast.LENGTH_SHORT).show()
+            } else {
+                val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("BLE Event Log", text))
+                // Android 13+ shows its own clipboard confirmation toast, suppress ours
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
+                    Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show()
+                showLog("📋 Log copied to clipboard")
+            }
+            true // consume the long-click
         }
 
         updateUiForState(BleState.DISCONNECTED)
         updateBeaconStatus(BeaconStatus.IDLE)
     }
 
+    // ── File-stream callbacks (called on BleManager's GATT thread) ────────────
+
+    /**
+     * Called once per fully-reassembled .dat file delivered by the beacon
+     * after a Stop command.  Saves the file and refreshes the list on the
+     * main thread.
+     */
+    private fun onDatFileReceived(fileId: Int, data: ByteArray) {
+        val file = measurementRepository.saveDatFile(fileId, data)
+        mainHandler.post {
+            showLog("💾 Received file $fileId → ${file.name}  (${file.length()} B)")
+            refreshFileList()
+        }
+    }
+
+    /**
+     * Called when Stream_end is received — all files for this Stop command
+     * have been delivered.
+     */
+    private fun onTransferComplete() {
+        mainHandler.post {
+            showLog("✅ File transfer complete")
+            refreshFileList()
+        }
+    }
+
+    // ── CSV export ────────────────────────────────────────────────────────────
+
+    private fun exportLastBinAsCsv() {
+        val binFile = measurementRepository.listBinFiles().firstOrNull() ?: run {
+            showLog("⚠ No .bin measurement file to export")
+            return
+        }
+
+        // Run on background thread — file I/O + parsing can be slow for large files
+        Thread {
+            val csvFile = measurementRepository.exportToCsv(binFile) { errMsg ->
+                mainHandler.post { showLog("❌ CSV export: $errMsg") }
+            }
+            mainHandler.post {
+                if (csvFile == null) return@post
+                showLog("✅ CSV exported: ${csvFile.name}  (${csvFile.length()} B)")
+                // Share the file via the system share sheet using FileProvider
+                // so other apps (Files, Gmail, Drive, …) can receive it.
+                try {
+                    val uri = FileProvider.getUriForFile(
+                        this, "${packageName}.fileprovider", csvFile
+                    )
+                    startActivity(Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/csv"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            putExtra(Intent.EXTRA_SUBJECT,
+                                "Beacon measurement ${csvFile.nameWithoutExtension}")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        },
+                        "Share CSV via…"
+                    ))
+                } catch (e: Exception) {
+                    showLog("⚠ Share failed: ${e.message}")
+                }
+            }
+        }.start()
+    }
+
+    // ── BLE state callbacks ───────────────────────────────────────────────────
+
     private fun checkPermissionsAndInit() {
         val missing = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isEmpty()) {
-            initializeBle()
-        } else {
-            permissionLauncher.launch(missing.toTypedArray())
-        }
+        if (missing.isEmpty()) initializeBle()
+        else permissionLauncher.launch(missing.toTypedArray())
     }
 
     private fun initializeBle() {
-        val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-        val adapter = bluetoothManager.adapter
-        if (adapter == null || !adapter.isEnabled) {
-            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(intent)
-        } else {
-            startScanning()
-        }
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (adapter == null || !adapter.isEnabled)
+            enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+        else startScanning()
     }
 
     private fun startScanning() {
         updateUiForState(BleState.SCANNING)
-        showLog("🔍 Scanning for ESP32-C6 beacon...")
+        showLog("🔍 Scanning for ESP32-C6 beacon…")
         bleManager.startScan()
     }
 
@@ -147,14 +243,11 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post {
             updateUiForState(state)
             when (state) {
-                BleState.CONNECTED -> showLog("✅ Connected to beacon")
-                BleState.DISCONNECTED -> {
-                    showLog("🔌 Disconnected")
-                    updateBeaconStatus(BeaconStatus.IDLE)
-                }
-                BleState.SCANNING -> showLog("🔍 Scanning...")
-                BleState.CONNECTING -> showLog("⏳ Connecting...")
-                BleState.ERROR -> showLog("❌ BLE Error occurred")
+                BleState.CONNECTED    -> showLog("✅ Connected to beacon")
+                BleState.DISCONNECTED -> { showLog("🔌 Disconnected"); updateBeaconStatus(BeaconStatus.IDLE) }
+                BleState.SCANNING     -> showLog("🔍 Scanning…")
+                BleState.CONNECTING   -> showLog("⏳ Connecting…")
+                BleState.ERROR        -> showLog("❌ BLE Error")
             }
         }
     }
@@ -163,34 +256,35 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post {
             updateBeaconStatus(status)
             when (status) {
-                BeaconStatus.IDLE -> showLog("💤 Beacon: Idle")
+                BeaconStatus.IDLE    -> showLog("💤 Beacon: Idle")
                 BeaconStatus.RANGING -> showLog("📡 Beacon: Ranging active")
-                BeaconStatus.ERROR -> showLog("⚠ Beacon: Error state")
+                BeaconStatus.ERROR   -> showLog("⚠ Beacon: Error state")
             }
         }
     }
 
     private fun onMeasurementDataReceived(data: ByteArray) {
         mainHandler.post {
-            val filePath = measurementRepository.saveMeasurement(data)
-            showLog("💾 Measurement saved: ${filePath.substringAfterLast('/')}")
+            val path = measurementRepository.saveMeasurement(data)
+            showLog("💾 Measurement saved: ${path.substringAfterLast('/')}")
             refreshFileList()
         }
     }
 
+    // ── UI helpers ────────────────────────────────────────────────────────────
+
     private fun updateUiForState(state: BleState) {
         val connected = state == BleState.CONNECTED
-        val scanning = state == BleState.SCANNING || state == BleState.CONNECTING
+        val scanning  = state == BleState.SCANNING || state == BleState.CONNECTING
 
         binding.btnScan.text = when (state) {
             BleState.CONNECTED -> "Disconnect"
             BleState.SCANNING, BleState.CONNECTING -> "Scanning…"
             else -> "Connect"
         }
-        binding.btnScan.isEnabled = state != BleState.SCANNING && state != BleState.CONNECTING
-
+        binding.btnScan.isEnabled = !scanning
         binding.btnStartMeasurement.isEnabled = connected
-        binding.btnStopMeasurement.isEnabled = connected
+        binding.btnStopMeasurement.isEnabled  = connected
 
         binding.connectionStatusDot.setImageResource(
             when (state) {
@@ -201,11 +295,11 @@ class MainActivity : AppCompatActivity() {
             }
         )
         binding.tvConnectionStatus.text = when (state) {
-            BleState.CONNECTED -> "Connected"
-            BleState.SCANNING -> "Scanning"
+            BleState.CONNECTED  -> "Connected"
+            BleState.SCANNING   -> "Scanning"
             BleState.CONNECTING -> "Connecting"
-            BleState.ERROR -> "Error"
-            else -> "Disconnected"
+            BleState.ERROR      -> "Error"
+            else                -> "Disconnected"
         }
 
         binding.scanProgress.visibility = if (scanning) View.VISIBLE else View.GONE
@@ -213,9 +307,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateBeaconStatus(status: BeaconStatus) {
         binding.tvBeaconState.text = when (status) {
-            BeaconStatus.IDLE -> "IDLE"
+            BeaconStatus.IDLE    -> "IDLE"
             BeaconStatus.RANGING -> "MEASURING"
-            BeaconStatus.ERROR -> "ERROR"
+            BeaconStatus.ERROR   -> "ERROR"
         }
         binding.beaconStatusIndicator.setBackgroundResource(
             when (status) {
@@ -228,25 +322,49 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLog(message: String) {
         mainHandler.post {
-            val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-            val current = binding.tvLog.text.toString()
-            val newLine = "[$timestamp] $message"
-            val updated = if (current.isEmpty()) newLine else "$newLine\n$current"
-            // Keep last 30 lines
-            val lines = updated.lines().take(30).joinToString("\n")
-            binding.tvLog.text = lines
+            val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val updated = "[$ts] $message\n${binding.tvLog.text}"
+            binding.tvLog.text = updated.lines().take(30).joinToString("\n")
+
+            // val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            // val current = binding.tvLog.text.toString()
+            // val newLine = "[$timestamp] $message"
+            // val updated = if (current.isEmpty()) newLine else "$newLine\n$current"
+            // // Keep last 30 lines
+            // val lines = updated.lines().take(30).joinToString("\n")
+            // binding.tvLog.text = lines
         }
     }
 
+    /**
+     * Rebuild the file list display and enable/disable action buttons.
+     *
+     * Shows .bin and .dat files in a unified list, with a type badge:
+     *   📦 for .dat files transferred via the file-stream protocol
+     *   📄 for .bin measurement blobs
+     *
+     * btnPlot and btnExportCsv are enabled only when at least one .bin file
+     * exists (they require CSIB format parsing).
+     */
     private fun refreshFileList() {
-        val files = measurementRepository.listFiles()
-        if (files.isEmpty()) {
-            binding.tvFileList.text = "No measurement files stored."
+        val allFiles  = measurementRepository.listFiles()
+        val binFiles  = measurementRepository.listBinFiles()
+        val hasAny    = allFiles.isNotEmpty()
+        val hasBin    = binFiles.isNotEmpty()
+
+        binding.tvFileList.text = if (allFiles.isEmpty()) {
+            "No measurement files stored."
         } else {
-            binding.tvFileList.text = files.joinToString("\n") { "📄 ${it.name}  (${it.length()} B)" }
+            allFiles.joinToString("\n") { f ->
+                val icon = if (f.name.endsWith(".dat")) "📦" else "📄"
+                "$icon ${f.name}  (${f.length()} B)"
+            }
         }
-        binding.btnDeleteLastFile.isEnabled = files.isNotEmpty()
-//        binding.btnDeleteAllFiles.isEnabled = files.isNotEmpty()
+
+        binding.btnDeleteLastFile.isEnabled = hasAny
+        binding.btnDeleteAllFiles.isEnabled = hasAny
+        binding.btnPlot.isEnabled           = hasBin
+        binding.btnExportCsv.isEnabled      = hasBin
     }
 
     override fun onDestroy() {

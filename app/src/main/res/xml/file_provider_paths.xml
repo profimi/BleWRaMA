@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider path configuration.
+    Exposes app-internal files so CSV exports can be shared via ACTION_SEND
+    without requiring WRITE_EXTERNAL_STORAGE permission.
+
+    <files-path> maps to Context.getFilesDir(), which is where
+    MeasurementRepository stores its "measurements/" subdirectory.
+-->
+<paths>
+    <files-path
+        name="measurements"
+        path="measurements/" />
+</paths>

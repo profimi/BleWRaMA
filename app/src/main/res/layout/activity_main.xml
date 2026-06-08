@@ -215,20 +215,22 @@
                     android:fontFamily="monospace"
                     android:paddingBottom="12dp" />
 
+                <!-- Row 1: Delete + Plot -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:weightSum="2">
+                    android:weightSum="3"
+                    android:layout_marginBottom="6dp">
 
                     <Button
                         android:id="@+id/btnDeleteLastFile"
                         android:layout_width="0dp"
                         android:layout_height="44dp"
                         android:layout_weight="1"
-                        android:layout_marginEnd="6dp"
-                        android:text="🗑 Delete Last"
-                        android:textSize="13sp"
+                        android:layout_marginEnd="4dp"
+                        android:text="🗑 Last"
+                        android:textSize="12sp"
                         android:textColor="@color/text_primary"
                         android:backgroundTint="@color/accent_orange"
                         android:enabled="false" />
@@ -238,13 +240,38 @@
                         android:layout_width="0dp"
                         android:layout_height="44dp"
                         android:layout_weight="1"
-                        android:layout_marginStart="6dp"
-                        android:text="🗑 Delete All"
-                        android:textSize="13sp"
+                        android:layout_marginStart="4dp"
+                        android:layout_marginEnd="4dp"
+                        android:text="🗑 All"
+                        android:textSize="12sp"
                         android:textColor="@color/text_primary"
                         android:backgroundTint="@color/accent_red"
                         android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnPlot"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:text="📈 Plot"
+                        android:textSize="12sp"
+                        android:textColor="@color/text_primary"
+                        android:backgroundTint="@color/accent_blue"
+                        android:enabled="false" />
                 </LinearLayout>
+
+                <!-- Row 2: Export CSV (full width) -->
+                <Button
+                    android:id="@+id/btnExportCsv"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:text="⬆ Export Last as CSV"
+                    android:textSize="13sp"
+                    android:textColor="@color/text_primary"
+                    android:backgroundTint="@color/accent_green"
+                    android:enabled="false" />
+
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
@@ -262,15 +289,31 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <!-- Log header row: label + hint -->
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="EVENT LOG"
-                    android:textColor="@color/accent_blue"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.15"
-                    android:paddingBottom="8dp" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingBottom="8dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="EVENT LOG"
+                        android:textColor="@color/accent_blue"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.15" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="long-press to copy"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="10sp" />
+                </LinearLayout>
 
                 <TextView
                     android:id="@+id/tvLog"
@@ -282,7 +325,8 @@
                     android:textSize="12sp"
                     android:fontFamily="monospace"
                     android:background="@color/log_bg"
-                    android:padding="8dp" />
+                    android:padding="8dp"
+                    android:longClickable="true" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
