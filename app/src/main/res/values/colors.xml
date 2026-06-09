@@ -4,6 +4,7 @@
     <color name="bg_dark">#0F1117</color>
     <color name="card_bg">#1C1F2A</color>
     <color name="log_bg">#111318</color>
+    <color name="toggle_bg">#1E1E1E</color>
 
     <!-- Text -->
     <color name="text_primary">#EAEDF3</color>

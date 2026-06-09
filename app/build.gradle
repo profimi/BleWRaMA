@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.lumais.blewfcsiram"
-    compileSdk = 36
+    compileSdk = 36.1
 
     defaultConfig {
         applicationId = "com.lumais.blewfcsiram"
         minSdk = 23          // BLE GATT API stable from API 23
-        targetSdk = 36
+        targetSdk = 36.1
         versionCode = 1
         versionName = "1.1"
     }
@@ -42,9 +42,10 @@ android {
 dependencies {
     implementation "androidx.core:core-ktx:1.18.0"
     implementation "androidx.appcompat:appcompat:1.7.1"
-    implementation "com.google.android.material:material:1.13.0"
+    implementation "com.google.android.material:material:1.14.0"
     implementation "androidx.cardview:cardview:1.0.0"
     implementation "androidx.constraintlayout:constraintlayout:2.2.1"
+    implementation 'com.google.android.material:material:1.14.0'
 
     // Chart library (MPAndroidChart via JitPack)
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'

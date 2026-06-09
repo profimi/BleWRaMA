@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.google.android.material.button.MaterialButtonToggleGroup
 import com.lumais.blewfcsiram.databinding.ActivityMainBinding
 import com.lumais.blewfcsiram.ble.BleManager
 import com.lumais.blewfcsiram.ble.BleState
@@ -26,12 +27,20 @@ import com.lumais.blewfcsiram.data.MeasurementRepository
 import java.text.SimpleDateFormat
 import java.util.*
 
+@JvmInline
+value class RangingMode private constructor(val value: Byte) {
+    companion object {
+        val FTM = RangingMode(0)
+        val CSI = RangingMode(1)
+    }
+}
 class MainActivity : AppCompatActivity() {
-
     private lateinit var binding: ActivityMainBinding
     private lateinit var bleManager: BleManager
     private lateinit var measurementRepository: MeasurementRepository
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var rangingMode = RangingMode.FTM
+    private val rangingToggle by lazy { findViewById<MaterialButtonToggleGroup>(R.id.rangingModeToggle) }
 
     private val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(
@@ -95,12 +104,24 @@ class MainActivity : AppCompatActivity() {
             else checkPermissionsAndInit()
         }
 
+        rangingToggle.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+
+            rangingMode = when (checkedId) {
+                R.id.btnFtm -> RangingMode.FTM
+                R.id.btnCsi -> RangingMode.CSI
+                else -> RangingMode.FTM
+            }
+        }
+
         // Measurement control
         binding.btnStartMeasurement.setOnClickListener {
-            bleManager.sendCommand(BleManager.CMD_START)
+            rangingToggle.isEnabled = false; rangingToggle.alpha = 0.5f
+            bleManager.sendCommand(BleManager.CMD_START, rangingMode.value)
             showLog("▶ Start measurement sent")
         }
         binding.btnStopMeasurement.setOnClickListener {
+            rangingToggle.isEnabled = true; rangingToggle.alpha = 1f
             bleManager.sendCommand(BleManager.CMD_STOP)
             showLog("■ Stop measurement sent")
         }

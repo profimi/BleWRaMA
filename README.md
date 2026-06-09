@@ -65,7 +65,7 @@ On `STATE_CONNECTED` the app calls `discoverServices()`, then:
 3. Reads the current Status value.
 
 ### Commands
-`sendCommand(CMD_START)` / `sendCommand(CMD_STOP)` write 1 byte to the
+`sendCommand(CMD_START, RANGING_MODE)` / `sendCommand(CMD_STOP)` write 1-2 bytes to the
 Command characteristic.  
 Write type is automatically selected:
 - `WRITE_TYPE_NO_RESPONSE` if the characteristic advertises `PROPERTY_WRITE_NO_RESPONSE`

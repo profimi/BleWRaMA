@@ -115,6 +115,7 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
+                <!-- Section title -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -123,7 +124,7 @@
                     android:textSize="11sp"
                     android:textStyle="bold"
                     android:letterSpacing="0.15"
-                    android:paddingBottom="12dp" />
+                    android:paddingBottom="8dp" />
 
                 <!-- Large status pill -->
                 <LinearLayout
@@ -150,33 +151,89 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:weightSum="2">
+                    android:orientation="horizontal">
 
-                    <Button
-                        android:id="@+id/btnStartMeasurement"
+                    <LinearLayout
                         android:layout_width="0dp"
-                        android:layout_height="52dp"
+                        android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:layout_marginEnd="6dp"
-                        android:text="▶  Start"
-                        android:textColor="@color/text_primary"
-                        android:backgroundTint="@color/accent_green"
-                        android:enabled="false"
-                        android:textStyle="bold" />
+                        android:orientation="vertical"
+                        android:layout_marginEnd="6dp">
 
-                    <Button
-                        android:id="@+id/btnStopMeasurement"
-                        android:layout_width="0dp"
-                        android:layout_height="52dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="6dp"
-                        android:text="■  Stop"
-                        android:textColor="@color/text_primary"
-                        android:backgroundTint="@color/accent_red"
-                        android:enabled="false"
-                        android:textStyle="bold" />
+                        <!-- Ranging mode label -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="RANGING MODE"
+                            android:textColor="@color/text_primary"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:letterSpacing="0.1"
+                            android:paddingBottom="6dp" />
+
+                        <!-- ✅ FTM / CSI toggle -->
+                        <!--
+                                        <com.google.android.material.switchmaterial.SwitchMaterial
+                                            android:id="@+id/switchMode"
+                                            android:layout_width="wrap_content"
+                                            android:layout_height="wrap_content"
+                                            android:text="FTM / CSI"
+                                            android:checked="true"/>
+                        -->
+                        <com.google.android.material.button.MaterialButtonToggleGroup
+                            android:id="@+id/rangingModeToggle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginBottom="12dp"
+                            app:singleSelection="true"
+                            app:selectionRequired="true"
+                            app:checkedButton="@id/btnFtm">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnFtm"
+                                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="FTM" />
+<!--
+                                app:backgroundTint="@color/toggle_button_bg"
+                                android:textColor="@color/toggle_button_text"
+-->
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnCsi"
+                                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="CSI" />
+
+                        </com.google.android.material.button.MaterialButtonToggleGroup>
+                    </LinearLayout>
+
+                        <Button
+                            android:id="@+id/btnStartMeasurement"
+                            android:layout_width="0dp"
+                            android:layout_height="68dp"
+                            android:layout_marginEnd="6dp"
+                            android:layout_weight="1"
+                            android:backgroundTint="@color/accent_green"
+                            android:enabled="false"
+                            android:text="▶  Start"
+                            android:textColor="@color/text_primary"
+                            android:textStyle="bold" />
                 </LinearLayout>
+
+                <Button
+                    android:id="@+id/btnStopMeasurement"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:text="■  Stop"
+                    android:textColor="@color/text_primary"
+                    android:backgroundTint="@color/accent_red"
+                    android:enabled="false"
+                    android:textStyle="bold" />
+
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 

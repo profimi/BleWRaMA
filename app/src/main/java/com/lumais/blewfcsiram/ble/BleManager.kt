@@ -214,7 +214,7 @@ class BleManager(
 
         val filter = ScanFilter.Builder()
 //            .setServiceUuid(ParcelUuid(SERVICE_UUID))
-            .setDeviceName("CSI-Ranging")
+            .setDeviceName("WiFi-Ranging")
             .build()
 
         val settings = ScanSettings.Builder()
@@ -596,14 +596,20 @@ class BleManager(
     }
 
     // ── Commands ──────────────────────────────────────────────────────────────
-
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun sendCommand(cmd: Byte) {
+    fun sendCommand(cmd: Byte, payload: Byte? = null) {
         val g    = gatt        ?: run { onLog("❌ Not connected"); return }
         val char = commandChar ?: run { onLog("❌ CMD char not ready"); return }
+
         // Reset parser state whenever a new Stop command is issued
         if (cmd == CMD_STOP) fileStreamParser.reset()
-        writeChar(g, char, byteArrayOf(cmd))
+
+        // Construct packet: [Command Byte] or [Command Byte, Payload Byte]
+        val data = if (payload != null)
+            byteArrayOf(cmd, payload)
+        else byteArrayOf(cmd)
+
+        writeChar(g, char, data)
     }
 
     // Note: that is not used yet intentionally
