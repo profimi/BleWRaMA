@@ -136,13 +136,22 @@ class BleManager(
     // ── CCCD subscription sequencing ──────────────────────────────────────────
     // We must write CCCDs one at a time and wait for onDescriptorWrite before
     // writing the next one.  This queue holds pending (characteristic, cccd) pairs.
-    private val cccdQueue = ArrayDeque<Pair<BluetoothGattCharacteristic, BluetoothGattDescriptor>>()
+    // private val cccdQueue = ArrayDeque<Pair<BluetoothGattCharacteristic, BluetoothGattDescriptor>>()
+
+    // Each entry carries the characteristic property flags so we can choose
+    // ENABLE_NOTIFICATION_VALUE vs ENABLE_INDICATION_VALUE correctly.
+    private data class CccdEntry(
+        val char: BluetoothGattCharacteristic,
+        val cccd: BluetoothGattDescriptor,
+        val properties: Int,
+    )
+    private val cccdQueue = ArrayDeque<CccdEntry>()
 
     // ── Connect-timeout watchdog ──────────────────────────────────────────────
     // Android's connectGatt can hang silently at status 133 without ever
     // calling onConnectionStateChange.  We force a close + retry after a timeout.
     private val connectTimeoutRunnable = Runnable {
-        onLog("⏱ Connection attempt timed out (no callback in ${CONNECT_TIMEOUT_MS}ms)")
+        onLog("⏱ Connection attempt timed out (${CONNECT_TIMEOUT_MS}ms)")
         retryOrFail()
     }
 
@@ -213,7 +222,7 @@ class BleManager(
         // the null in startScan() with listOf(filter).
 
         val filter = ScanFilter.Builder()
-//            .setServiceUuid(ParcelUuid(SERVICE_UUID))
+            // .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .setDeviceName("WiFi-Ranging")
             .build()
 
@@ -243,7 +252,6 @@ class BleManager(
         scanner?.startScan(listOf(filter)  // null
             , settings, scanCallback)
             ?: onLog("❌ BluetoothLeScanner null — Bluetooth off?")
-
         mainHandler.postDelayed(scanTimeoutRunnable, SCAN_TIMEOUT_MS)
     }
 
@@ -272,16 +280,15 @@ class BleManager(
         // ── FIX E: always pass TRANSPORT_LE explicitly ────────────────────────
         // Without TRANSPORT_LE the stack may attempt BR/EDR first on dual-mode
         // phones, wasting time and occasionally producing status=133.
-        gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
             freshDevice.connectGatt(
                 context,
                 false,              // autoConnect=false - direct connection, faster
                 gattCallback,
                 BluetoothDevice.TRANSPORT_LE
             )
-        } else {
+        else
             freshDevice.connectGatt(context, false, gattCallback)
-        }
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -292,8 +299,8 @@ class BleManager(
 
         if (connectRetries < MAX_CONNECT_RETRIES - 1) {
             connectRetries++
-            onLog("🔄 Retrying connection (${connectRetries + 1}/$MAX_CONNECT_RETRIES) " +
-                  "— pausing 1 s to let stack settle")
+            onLog("🔄 Retrying (${connectRetries + 1}/$MAX_CONNECT_RETRIES) " +
+                  "with pausing 0.5 s")
             // ── FIX F: short delay between retries ───────────────────────────
             // The Android BLE stack sometimes keeps an internal connection
             // attempt alive for a few hundred ms after close().  A 1-second
@@ -301,7 +308,7 @@ class BleManager(
             mainHandler.postDelayed({
                 pendingDevice?.let { connectToDevice(it) }
                     ?: run { onLog("❌ No device to retry"); setState(BleState.ERROR) }
-            }, 1_000)
+            }, 500)
         } else {
             onLog("❌ All $MAX_CONNECT_RETRIES attempts failed")
             setState(BleState.ERROR)
@@ -401,7 +408,7 @@ class BleManager(
 
             val service = g.getService(SERVICE_UUID.reverseEndianness())
             if (service == null) {
-                onLog("❌ Service $SERVICE_UUID not in list above — UUID mismatch or cache issue")
+                onLog("❌ Service $SERVICE_UUID not found — see dump above")
                 onLog("   → Try toggling Bluetooth or clearing app storage to flush GATT cache")
                 refreshGattCache(g)
                 setState(BleState.ERROR)
@@ -426,19 +433,47 @@ class BleManager(
             }
 
             // ── Build CCCD subscription queue ─────────────────────────────────
-            // Android GATT is single-operation: queue all (char, cccd) pairs and
-            // drain them one at a time via onDescriptorWrite.
+            // // Android GATT is single-operation: queue all (char, cccd) pairs and
+            // // drain them one at a time via onDescriptorWrite.
+            // FIX 1: choose the correct CCCD value per characteristic property.
+            //
+            //   NOTIFY   → ENABLE_NOTIFICATION_VALUE = {0x01, 0x00}
+            //   INDICATE → ENABLE_INDICATION_VALUE   = {0x02, 0x00}
+            //
+            // Sending ENABLE_NOTIFICATION_VALUE to an INDICATE-only characteristic
+            // (like 0xFF04 on this firmware) is rejected by NimBLE with
+            // BLE_ATT_ERR_REQ_NOT_SUPPORTED (error 6), so no indications are
+            // ever delivered.  The property flags are stored in the queue entry
+            // and used in drainCccdQueue().
             cccdQueue.clear()
 
             fun enqueue(char: BluetoothGattCharacteristic?) {
                 if (char == null) return
-                val cccd = char.getDescriptor(CCCD_UUID) ?: return
+                // val cccd = char.getDescriptor(CCCD_UUID) ?: return
+                val cccd = char.getDescriptor(CCCD_UUID) ?: run {
+                    onLog("⚠ No CCCD descriptor on ${char.uuid} — skipping")
+                    return
+                }
+                val props = char.properties
+                val hasNotify   = props and BluetoothGattCharacteristic.PROPERTY_NOTIFY   != 0
+                val hasIndicate = props and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
+                if (!hasNotify && !hasIndicate) {
+                    onLog("⚠ ${char.uuid} has neither NOTIFY nor INDICATE — skipping CCCD")
+                    return
+                }
+                val modeLabel = when {
+                    hasNotify && hasIndicate -> "NOTIFY+INDICATE"
+                    hasNotify               -> "NOTIFY"
+                    else                    -> "INDICATE"
+                }
+                onLog("  Queuing CCCD for ${char.uuid} [$modeLabel]")
                 g.setCharacteristicNotification(char, true)
-                cccdQueue.addLast(char to cccd)
+                // cccdQueue.addLast(char to cccd)
+                cccdQueue.addLast(CccdEntry(char, cccd, props))
             }
 
-            enqueue(statusChar)   // FF02 — must subscribe first
-            enqueue(dataChar)     // FF04 — file-transfer notifications
+            enqueue(statusChar)   // FF02 — NOTIFY; must subscribe first
+            enqueue(dataChar)     // FF04 — INDICATE; file-transfer notifications
 
             drainCccdQueue(g)
         }
@@ -531,13 +566,15 @@ class BleManager(
         }
     }
 
-    // ── Notification dispatch ─────────────────────────────────────────────────
+    // ── Notification / indication dispatch ────────────────────────────────────
+    // Android delivers both NOTIFY and INDICATE through onCharacteristicChanged;
+    // no distinction is needed here.
 
     private fun dispatchNotification(uuid: UUID, value: ByteArray) {
         when (uuid) {
             CHAR_STATUS_UUID -> handleStatusUpdate(value)
             CHAR_DATA_UUID   -> {
-                onLog("📡 Data notification: ${value.size} B")
+                onLog("📡 Data indication: ${value.size} B")
                 fileStreamParser.feed(value)
             }
         }
@@ -546,15 +583,27 @@ class BleManager(
     // ── CCCD queue drain ──────────────────────────────────────────────────────
 
     private fun drainCccdQueue(g: BluetoothGatt) {
-        val (_, cccd) = cccdQueue.removeFirst()
-        val enableBytes = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        // val (_, cccd) = cccdQueue.removeFirst()
+        // val enableBytes = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        val entry = cccdQueue.removeFirst()
+        // FIX 1: select the correct CCCD enable value based on property flags.
+        // INDICATE characteristics (like FF04) must receive {0x02, 0x00};
+        // sending {0x01, 0x00} is rejected by NimBLE with error 6.
+        val enableValue = when {
+            entry.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0 ->
+                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE    // {0x02, 0x00}
+            else ->
+                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE  // {0x01, 0x00}
+        }
+        onLog("  Writing CCCD ${entry.char.uuid} → ${enableValue.toHex()}")
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(cccd, enableBytes)
+            g.writeDescriptor(entry.cccd, enableValue)
         } else {
             @Suppress("DEPRECATION")
-            cccd.value = enableBytes
+            entry.cccd.value = enableValue
             @Suppress("DEPRECATION")
-            g.writeDescriptor(cccd)
+            g.writeDescriptor(entry.cccd)
         }
     }
 
@@ -585,12 +634,10 @@ class BleManager(
             else -> { onLog("⚠ Unknown status byte: 0x${raw.toString(16)}"); BeaconStatus.ERROR }
         }
         onLog("📊 Status: $status")
-
-        if (lastBeaconStatus == BeaconStatus.RANGING && status != BeaconStatus.RANGING && isCollecting) {
+        if (lastBeaconStatus == BeaconStatus.RANGING && status != BeaconStatus.RANGING && isCollecting)
             finalizeMeasurement()
-        }
-        if (status == BeaconStatus.RANGING) isCollecting = true
-
+        if (status == BeaconStatus.RANGING)
+            isCollecting = true
         lastBeaconStatus = status
         onBeaconStatus(status)
     }
@@ -693,4 +740,8 @@ class BleManager(
         currentState = state
         onStateChanged(state)
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun ByteArray.toHex() = joinToString(" ") { "%02X".format(it) }
 }
