@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram.data
+package com.lumais.blewrama.data
 
 import java.io.File
 import java.nio.ByteBuffer
@@ -16,7 +16,7 @@ data class CsibHeader(
 // ── Record (24 bytes) ────────────────────────────────────────────────────────
 data class CsibRecord(
     val seq: UInt,
-    val timestampMs: UInt,      // ms since session start
+//    val timestampMs: UInt,      // ms since session start
     val distRawM: Float,        // raw ToF distance (m)
     val distFilteredM: Float,   // Kalman-filtered distance (m)
     val variance: Float,        // Kalman P covariance
@@ -26,7 +26,8 @@ data class CsibRecord(
 ) {
     val rssiDbm: Int get() = rssiRaw.toInt() - 128
     /** X-axis value: time in units of 100 ms */
-    val timeHundredMs: Float get() = timestampMs.toFloat() / 100f
+//    val timeHundredMs: Float get() = timestampMs.toFloat() / 100f
+    val timeHundredMs: Float get() = seq.toFloat() * 10f  / CsibParser.MPS
 }
 
 // ── Aggregated slot (one 100 ms bucket) ─────────────────────────────────────
@@ -48,7 +49,8 @@ object CsibParser {
 
     private const val MAGIC = 0x43534942u
     private const val HEADER_SIZE = 32
-    private const val RECORD_SIZE = 24
+    private const val RECORD_SIZE = 20  // 20 without timestamp_ms, otherwise 24
+    const val MPS = 20  // Measurements per second, must be synced with the measurements status
 
     fun parse(file: File): ParseResult {
         return try {
@@ -74,7 +76,7 @@ object CsibParser {
 
             // Validate record size
             if (recordSize.toInt() != RECORD_SIZE)
-                return ParseResult.Error("Unexpected record size: ${recordSize.toInt()} (expected $RECORD_SIZE)")
+                return ParseResult.Error("Unexpected record size in CsibParser: ${recordSize.toInt()} (expected $RECORD_SIZE)")
 
             // ── Records ───────────────────────────────────────────────────
             val available = (bytes.size - HEADER_SIZE) / RECORD_SIZE
@@ -83,7 +85,7 @@ object CsibParser {
 
             repeat(count) {
                 val seq             = buf.int.toUInt()
-                val timestampMs     = buf.int.toUInt()
+                // val timestampMs     = buf.int.toUInt()
                 val distRaw         = buf.float
                 val distFiltered    = buf.float
                 val variance        = buf.float
@@ -93,7 +95,8 @@ object CsibParser {
                 buf.get() // _pad
 
                 records += CsibRecord(
-                    seq, timestampMs, distRaw, distFiltered, variance,
+                    // , timestampMs
+                    seq, distRaw, distFiltered, variance,
                     rssiRaw, outlierRejected, valid
                 )
             }
@@ -114,7 +117,7 @@ object CsibParser {
         // Group by 100 ms bucket (floor of timeHundredMs)
         val buckets = LinkedHashMap<Int, MutableList<CsibRecord>>()
         for (r in records) {
-            val bucket = (r.timestampMs.toLong() / 100).toInt()
+            val bucket = r.seq.toInt()
             buckets.getOrPut(bucket) { mutableListOf() }.add(r)
         }
 

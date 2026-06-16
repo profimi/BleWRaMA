@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram
+package com.lumais.blewrama
 
 import android.Manifest
 import android.bluetooth.*
@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -19,21 +20,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.google.android.material.button.MaterialButtonToggleGroup
-import com.lumais.blewfcsiram.databinding.ActivityMainBinding
-import com.lumais.blewfcsiram.ble.BleManager
-import com.lumais.blewfcsiram.ble.BleState
-import com.lumais.blewfcsiram.ble.BeaconStatus
-import com.lumais.blewfcsiram.data.MeasurementRepository
+import com.lumais.blewrama.databinding.ActivityMainBinding
+import com.lumais.blewrama.ble.BleManager
+import com.lumais.blewrama.ble.BleState
+import com.lumais.blewrama.ble.BeaconStatus
+import com.lumais.blewrama.data.MeasurementRepository
+import com.lumais.blewrama.data.RangingMode
 import java.text.SimpleDateFormat
 import java.util.*
 
-@JvmInline
-value class RangingMode private constructor(val value: Byte) {
-    companion object {
-        val FTM = RangingMode(0)
-        val CSI = RangingMode(1)
-    }
-}
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var bleManager: BleManager
@@ -142,15 +137,15 @@ class MainActivity : AppCompatActivity() {
         // Opens PlotActivity, pre-loading the most recent stored file
         binding.btnPlot.setOnClickListener {
             // Plot only works on CSIB .bin files
-            val binFiles = measurementRepository.listBinFiles()
+            val compactDatFiles = measurementRepository.listCompactDatFiles()
             val intent = Intent(this, PlotActivity::class.java)
-            binFiles.firstOrNull()?.let {
+            compactDatFiles.firstOrNull()?.let {
                 intent.putExtra(PlotActivity.EXTRA_FILE_PATH, it.absolutePath)
             }
             startActivity(intent)
         }
 
-        binding.btnExportCsv.setOnClickListener { exportLastBinAsCsv() }
+        binding.btnExportCsv.setOnClickListener { exportLastDatAsCsv() }
 
         // Long-press event log to copy to clipboard
         binding.tvLog.setOnLongClickListener {
@@ -180,7 +175,7 @@ class MainActivity : AppCompatActivity() {
      * main thread.
      */
     private fun onDatFileReceived(fileId: Int, data: ByteArray) {
-        val file = measurementRepository.saveDatFile(fileId, data)
+        val file = measurementRepository.saveDatFile(fileId, rangingMode, data)
         mainHandler.post {
             showLog("💾 Received file $fileId → ${file.name}  (${file.length()} B)")
             refreshFileList()
@@ -200,15 +195,16 @@ class MainActivity : AppCompatActivity() {
 
     // ── CSV export ────────────────────────────────────────────────────────────
 
-    private fun exportLastBinAsCsv() {
-        val binFile = measurementRepository.listBinFiles().firstOrNull() ?: run {
-            showLog("⚠ No .bin measurement file to export")
+    private fun exportLastDatAsCsv() {
+        // showLog("Starting CSV export")
+        val compactDatFile = measurementRepository.listCompactDatFiles().firstOrNull() ?: run {
+            showLog("⚠ No .dat measurement file to export")
             return
         }
 
         // Run on background thread — file I/O + parsing can be slow for large files
         Thread {
-            val csvFile = measurementRepository.exportToCsv(binFile) { errMsg ->
+            val csvFile = measurementRepository.exportToCsv(compactDatFile) { errMsg ->
                 mainHandler.post { showLog("❌ CSV export: $errMsg") }
             }
             mainHandler.post {
@@ -286,7 +282,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onMeasurementDataReceived(data: ByteArray) {
         mainHandler.post {
-            val path = measurementRepository.saveMeasurement(data)
+            val path = measurementRepository.saveMeasurement(rangingMode, data)
             showLog("💾 Measurement saved: ${path.substringAfterLast('/')}")
             refreshFileList()
         }
@@ -360,18 +356,18 @@ class MainActivity : AppCompatActivity() {
     /**
      * Rebuild the file list display and enable/disable action buttons.
      *
-     * Shows .bin and .dat files in a unified list, with a type badge:
+     * Shows .txt and .dat files in a unified list, with a type badge:
      *   📦 for .dat files transferred via the file-stream protocol
-     *   📄 for .bin measurement blobs
+     *   📄 for .txt measurement blobs
      *
-     * btnPlot and btnExportCsv are enabled only when at least one .bin file
+     * btnPlot and btnExportCsv are enabled only when at least one .dat file
      * exists (they require CSIB format parsing).
      */
     private fun refreshFileList() {
         val allFiles  = measurementRepository.listFiles()
-        val binFiles  = measurementRepository.listBinFiles()
+        val CompactDatFiles  = measurementRepository.listCompactDatFiles()
         val hasAny    = allFiles.isNotEmpty()
-        val hasBin    = binFiles.isNotEmpty()
+        val hasCms    = CompactDatFiles.isNotEmpty()
 
         binding.tvFileList.text = if (allFiles.isEmpty()) {
             "No measurement files stored."
@@ -382,10 +378,48 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnDeleteLastFile.isEnabled = hasAny
-        binding.btnDeleteAllFiles.isEnabled = hasAny
-        binding.btnPlot.isEnabled           = hasBin
-        binding.btnExportCsv.isEnabled      = hasBin
+        // binding.btnDeleteLastFile.isEnabled = hasAny
+        // binding.btnDeleteAllFiles.isEnabled = hasAny
+        // binding.btnPlot.isEnabled           = hasCms
+        // binding.btnExportCsv.isEnabled      = hasCms
+        setButtonState(binding.btnDeleteLastFile, hasAny,
+            enabledColorRes  = R.color.accent_orange,
+            enabledTextRes   = R.color.text_primary)
+        setButtonState(binding.btnDeleteAllFiles, hasAny,
+            enabledColorRes  = R.color.accent_red,
+            enabledTextRes   = R.color.text_primary)
+        setButtonState(binding.btnPlot, hasCms,
+            enabledColorRes  = R.color.accent_blue,
+            enabledTextRes   = R.color.text_primary)
+        setButtonState(binding.btnExportCsv, hasCms,
+            enabledColorRes  = R.color.accent_green,
+            enabledTextRes   = R.color.text_primary)
+    }
+
+    /**
+     * Enable or visually disable a Button with explicit colour control.
+     *
+     * Enabled  → full [enabledColorRes] background, [enabledTextRes] label, alpha 1.0
+     * Disabled → muted [R.color.btn_disabled_bg] background,
+     *            [R.color.btn_disabled_text] label, alpha 0.5
+     *
+     * Using explicit colours (rather than relying on the system disabled tint)
+     * makes the inactive state clearly visible on dark card backgrounds.
+     */
+    private fun setButtonState(
+        btn: android.widget.Button,
+        enabled: Boolean,
+        enabledColorRes: Int,
+        enabledTextRes: Int,
+    ) {
+        btn.isEnabled = enabled
+        val bgColor   = ContextCompat.getColor(this,
+            if (enabled) enabledColorRes else R.color.btn_disabled_bg)
+        val textColor = ContextCompat.getColor(this,
+            if (enabled) enabledTextRes  else R.color.btn_disabled_text)
+        btn.backgroundTintList = ColorStateList.valueOf(bgColor)
+        btn.setTextColor(textColor)
+        btn.alpha = if (enabled) 1f else 0.5f
     }
 
     override fun onDestroy() {

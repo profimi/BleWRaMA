@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram
+package com.lumais.blewrama
 
 import android.content.Context
 import android.widget.TextView

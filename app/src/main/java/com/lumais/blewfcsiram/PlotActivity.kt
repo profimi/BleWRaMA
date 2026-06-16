@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram
+package com.lumais.blewrama
 
 import android.content.Intent
 import android.graphics.Color
@@ -9,11 +9,11 @@ import android.widget.CheckBox
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.lumais.blewfcsiram.data.CsibParser
-import com.lumais.blewfcsiram.data.MeasurementRepository
-import com.lumais.blewfcsiram.data.ParseResult
-import com.lumais.blewfcsiram.data.TimeSlot
-import com.lumais.blewfcsiram.databinding.ActivityPlotBinding
+import com.lumais.blewrama.data.CsibParser
+import com.lumais.blewrama.data.MeasurementRepository
+import com.lumais.blewrama.data.ParseResult
+import com.lumais.blewrama.data.TimeSlot
+import com.lumais.blewrama.databinding.ActivityPlotBinding
 import com.github.mikephil.charting.components.Legend
 import com.github.mikephil.charting.components.LimitLine
 import com.github.mikephil.charting.components.YAxis
@@ -82,7 +82,7 @@ class PlotActivity : AppCompatActivity() {
 
         binding.btnLoadInternal.setOnClickListener {
             val pos = binding.spinnerFiles.selectedItemPosition
-            val files = repo.listFiles()
+            val files = repo.listCompactDatFiles()   // only CSIB .dat files are plottable
             if (pos in files.indices) loadAndPlot(files[pos])
             else showError("No file selected")
         }
@@ -95,8 +95,8 @@ class PlotActivity : AppCompatActivity() {
     }
 
     private fun refreshFileSpinner() {
-        val files = repo.listFiles()
-        val names = if (files.isEmpty()) listOf("— no files —") else files.map { it.name }
+        val files = repo.listCompactDatFiles()   // only CSIB .dat files are plottable; .dat excluded
+        val names = if (files.isEmpty()) listOf("— no `1_*.dat files —") else files.map { it.name }
         binding.spinnerFiles.adapter = android.widget.ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item, names
         )

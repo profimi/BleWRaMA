@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram.ble
+package com.lumais.blewrama.ble
 
 import android.Manifest
 import android.bluetooth.*
@@ -382,7 +382,7 @@ class BleManager(
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 onLog("❌ Service discovery failed: status=${gattStatusName(status)}")
                 // ── FIX H: stale GATT cache can report 0 services or wrong UUIDs
-                // If this fires, run:  adb shell pm clear com.lumais.blewfcsiram
+                // If this fires, run:  adb shell pm clear com.lumais.blewrama
                 // or toggle Bluetooth off/on to clear the host-side cache.
                 // On Android 8+ you can also call g.refresh() via reflection (see below).
                 refreshGattCache(g)

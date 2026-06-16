@@ -23,6 +23,10 @@
     <color name="status_measuring">#1A6B3A</color>
     <color name="status_error">#7B1A1A</color>
 
+    <!-- Button disabled state -->
+    <color name="btn_disabled_bg">#2A2D3A</color>
+    <color name="btn_disabled_text">#4A4E62</color>
+
     <!-- Dots -->
     <color name="dot_gray">#555A6E</color>
     <color name="dot_green">#2ECC71</color>

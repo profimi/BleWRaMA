@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lumais.blewfcsiram"
+    namespace = "com.lumais.blewrama"
     compileSdk = 36.1
 
     defaultConfig {
-        applicationId = "com.lumais.blewfcsiram"
+        applicationId = "com.lumais.blewrama"
         minSdk = 23          // BLE GATT API stable from API 23
         targetSdk = 36.1
         versionCode = 1

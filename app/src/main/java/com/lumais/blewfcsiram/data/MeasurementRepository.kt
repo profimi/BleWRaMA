@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram.data
+package com.lumais.blewrama.data
 
 import android.content.Context
 import java.io.File
@@ -10,12 +10,26 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
+@JvmInline
+value class RangingMode private constructor(val value: Byte) {
+
+    override fun toString(): String = when (value) {
+        0.toByte() -> "FTM"
+        1.toByte() -> "CSI"
+        else -> "UNKNOWN($value)"
+    }
+    companion object {
+        val FTM = RangingMode(0)
+        val CSI = RangingMode(1)
+    }
+}
+
 /**
  * Unified repository for all locally-stored measurement files:
  *
- *  • .bin  — raw CSIB binary blobs received over the legacy measurement path
+ *  • .txt  — measurement status files
  *  • .dat  — raw files transferred via the framed 0xFF04 file-stream protocol
- *  • .csv  — CSV exports derived from .bin files
+ *  • .csv  — CSV exports derived from CSIB .dat files
  *
  * All files live in  <app-internal>/measurements/
  */
@@ -25,16 +39,16 @@ class MeasurementRepository(private val context: Context) {
         File(context.filesDir, "measurements").also { it.mkdirs() }
     }
 
-    // ── .bin save (legacy CSIB path) ──────────────────────────────────────────
+    // ── .dat save (legacy CSIB path) ──────────────────────────────────────────
     /**
-     * Save raw BLE measurement bytes to a timestamped .bin file.
+     * Save raw BLE measurement bytes to a timestamped 1_*.dat file.
      * The file begins with a 4-line text header followed immediately by the
      * raw CSIB binary payload (header + records as received from the beacon).
      * Returns the absolute path of the saved file.
      */
-    fun saveMeasurement(data: ByteArray): String {
-        val timestamp = nowStamp("yyyyMMdd_HHmmss_SSS")
-        val file = File(measurementDir, "measurement_$timestamp.bin")
+    fun saveMeasurement(rmode: RangingMode, data: ByteArray): String {
+        val timestamp = nowStamp("MMdd-HHmm")
+        val file = File(measurementDir, "1_${rmode}_${timestamp}.dat")
         file.outputStream().use { out ->
             out.write(
                 ("# ESP32-C6 Beacon Measurement\n" +
@@ -51,14 +65,15 @@ class MeasurementRepository(private val context: Context) {
     /**
      * Save a raw file received via the BLE file-stream protocol.
      *
-     * Naming: <file_id>_<DD-hh-mm>.dat  (day-hour-minute of reception)
+     * Naming: <file_id>_<MMDD-hhmm>.dat  (MonthDay-HourMinute of reception)
      * e.g.   2_19-14-35.dat
      *
      * Returns the saved [File].
      */
-    fun saveDatFile(fileId: Int, data: ByteArray): File {
-        val stamp = nowStamp("dd-HH-mm")
-        val file  = File(measurementDir, "${fileId}_$stamp.dat")
+    fun saveDatFile(fileId: Int, rangingMode: RangingMode, data: ByteArray): File {
+        val stamp = nowStamp("MMdd-HHmm")
+        // 0 - stats, 1 - compact, 2 - detailed
+        val file  = File(measurementDir, "${fileId}_${rangingMode}_${stamp}.dat")
         file.writeBytes(data)
         return file
     }
@@ -66,7 +81,7 @@ class MeasurementRepository(private val context: Context) {
     // ── CSV export ────────────────────────────────────────────────────────────
 
     /**
-     * Parse [binFile] as a CSIB binary measurement and write a CSV file
+     * Parse [compactDatFile] as a CSIB binary measurement and write a CSV file
      * alongside it (same base name, .csv extension) in the measurements dir.
      *
      * CSV structure:
@@ -77,20 +92,20 @@ class MeasurementRepository(private val context: Context) {
      * Returns the CSV [File] on success, null on failure.
      * [onError] receives a human-readable reason string on failure.
      */
-    fun exportToCsv(binFile: File, onError: (String) -> Unit = {}): File? {
+    fun exportToCsv(compactDatFile: File, onError: (String) -> Unit = {}): File? {
         return try {
             // ── 1. Read the raw bytes, skipping the prepended text header ──
-            val allBytes = binFile.readBytes()
+            val allBytes = compactDatFile.readBytes()
             val payloadStart = findPayloadStart(allBytes)
             if (payloadStart < 0) {
-                onError("Cannot locate binary payload in ${binFile.name}")
+                onError("Cannot locate binary payload in ${compactDatFile.name}")
                 return null
             }
             val payload = allBytes.copyOfRange(payloadStart, allBytes.size)
 
             // ── 2. Parse CSIB structure ────────────────────────────────────
             val HEADER_SIZE = 32
-            val RECORD_SIZE = 24
+            val RECORD_SIZE = 20  // 20 without timestamp_ms, otherwise 24
             val MAGIC       = 0x43534942 // "CSIB" little-endian
 
             if (payload.size < HEADER_SIZE) {
@@ -98,6 +113,7 @@ class MeasurementRepository(private val context: Context) {
                 return null
             }
 
+            // Parse header
             val buf         = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
             val magic       = buf.int.toUInt().toInt()
             val version     = buf.short.toInt()
@@ -116,12 +132,12 @@ class MeasurementRepository(private val context: Context) {
             }
 
             val count   = minOf(recordCount, (payload.size - HEADER_SIZE) / RECORD_SIZE)
-            val csvFile = File(measurementDir, binFile.nameWithoutExtension + ".csv")
+            val csvFile = File(measurementDir, compactDatFile.nameWithoutExtension + ".csv")
 
             csvFile.bufferedWriter(Charsets.UTF_8).use { w ->
                 // Comment header block
                 w.write("# ESP32-C6 Beacon Measurement Export\n")
-                w.write("# Source file : ${binFile.name}\n")
+                w.write("# Source file : ${compactDatFile.name}\n")
                 w.write("# Export time : ${nowStamp("yyyy-MM-dd HH:mm:ss")}\n")
                 w.write("# CSIB version: $version\n")
                 w.write("# Record count: $count\n")
@@ -129,7 +145,7 @@ class MeasurementRepository(private val context: Context) {
                 w.write("# ---\n")
                 w.write("# Columns:\n")
                 w.write("#   seq             - Measurement sequence number\n")
-                w.write("#   timestamp_ms    - ms since session start\n")
+//                w.write("#   timestamp_ms    - ms since session start\n")
                 w.write("#   dist_raw_m      - Raw ToF distance (metres)\n")
                 w.write("#   dist_filtered_m - Kalman-filtered distance (metres)\n")
                 w.write("#   variance        - Kalman P covariance\n")
@@ -140,13 +156,14 @@ class MeasurementRepository(private val context: Context) {
                 w.write("# ---\n")
 
                 // Column header
-                w.write("seq,timestamp_ms,dist_raw_m,dist_filtered_m,variance," +
+                // ,timestamp_ms
+                w.write("seq,dist_raw_m,dist_filtered_m,variance," +
                         "rssi_dbm,rssi_raw,outlier,valid\n")
 
-                // Data rows
+                // Data rows (records)
                 repeat(count) {
                     val seq             = buf.int.toLong() and 0xFFFFFFFFL
-                    val timestampMs     = buf.int.toLong() and 0xFFFFFFFFL
+                    // val timestampMs     = buf.int.toLong() and 0xFFFFFFFFL
                     val distRaw         = buf.float
                     val distFiltered    = buf.float
                     val variance        = buf.float
@@ -157,7 +174,8 @@ class MeasurementRepository(private val context: Context) {
 
                     val rssiDbm = rssiRaw - 128
 
-                    w.write("$seq,$timestampMs,")
+                    w.write("$seq,")
+                    // w.write("$seq,$timestampMs,")
                     w.write("${formatFloat(distRaw)},")
                     w.write("${formatFloat(distFiltered)},")
                     w.write("${formatFloat(variance)},")
@@ -174,30 +192,31 @@ class MeasurementRepository(private val context: Context) {
 
     // ── File listing ──────────────────────────────────────────────────────────
     /**
-     * List all measurement files (.bin and .dat), newest-first.
+     * List all measurement files (.dat and .txt), newest-first.
      * .csv and other derived files are excluded.
      */
     fun listFiles(): List<File> =
         measurementDir
             .listFiles { f ->
-                (f.name.startsWith("measurement_") && f.name.endsWith(".bin")) ||
-                f.name.endsWith(".dat")
+                //f.name.startsWith("measurement_") &&
+                f.name.endsWith(".dat") || f.name.endsWith(".txt")
             }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
     /**
-     * Return only .bin files (newest-first) — used by the CSV export and plot
+     * Return only compact measurement .dat files (newest-first) — used by the CSV export and plot
      * features which understand the CSIB format.
      */
-    fun listBinFiles(): List<File> =
+    fun listCompactDatFiles(): List<File> =
         measurementDir
-            .listFiles { f -> f.name.startsWith("measurement_") && f.name.endsWith(".bin") }
+            // measurement_
+            .listFiles { f -> f.name.startsWith("1_") && f.name.endsWith(".dat") }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
     /**
-     * Delete the most recently modified file (bin or dat).
+     * Delete the most recently modified file (txt or dat).
      * Returns true if a file was deleted.
      */
     fun deleteLastFile(): Boolean {
@@ -206,12 +225,12 @@ class MeasurementRepository(private val context: Context) {
     }
 
     /**
-     * Delete all measurement files (bin and dat) plus any derived csv files.
+     * Delete all measurement files (txt and dat) plus any derived csv files.
      * Returns the total number of files deleted.
      */
     fun deleteAllFiles(): Int {
         val targets = measurementDir.listFiles { f ->
-            f.name.endsWith(".bin") || f.name.endsWith(".dat") || f.name.endsWith(".csv")
+            f.name.endsWith(".txt") || f.name.endsWith(".dat") || f.name.endsWith(".csv")
         } ?: return 0
         return targets.count { it.delete() }
     }

@@ -3,7 +3,8 @@
 Kotlin Android application that connects to an ESP32-C3/6 Supermini WiFi-CSI/FTM ranging beacon over Bluetooth Low Energy (BLE), sends
 start/stop measurement commands, receives and persists streamed result files, visualises them, and exports them as CSV.
 
-(c) Professor & Claude, 2026-05.
+(c) Professor & Claude, 2026-05.  
+\license Apache License 2.0  
 
 ---
 
@@ -372,9 +373,9 @@ Parsed by `CsibParser.kt`.
   (example: raw `0xA8` = 168 → −40 dBm)
 - Records begin at byte offset **32** and repeat contiguously
 
-### 6.4 Payload Location in `.bin` Files
+### 6.4 Payload Location in `1_*.dat` Files
 
-`.bin` files saved by `MeasurementRepository` prepend a 4-line UTF-8 text
+`1_*.dat` files saved by `MeasurementRepository` prepend a 4-line UTF-8 text
 comment header (`# …\n` lines) before the raw CSIB bytes.
 `CsibParser` and `exportToCsv()` both locate the payload by scanning
 forward to the four-byte magic sequence `0x43 0x53 0x49 0x42`.
@@ -391,8 +392,9 @@ No `WRITE_EXTERNAL_STORAGE` permission is required.
 
 | Ext | Naming pattern | Content | Created by |
 |---|---|---|---|
-| `.bin` | `measurement_YYYYMMDD_HHmmss_SSS.bin` | 4-line text header + raw CSIB binary | Legacy measurement path |
-| `.dat` | `<file_id>_<DD-HH-mm>.dat` | Raw bytes as received on 0xFF04 | File-stream transfer |
+<!-- | `.bin` | `measurement_YYYYMMDD_HHmmss_SSS.bin` | 4-line text header + raw CSIB binary | Legacy measurement path | -->
+<!-- | `.dat` | `1_MMDD-HHmm_SSS.dat`                 | 4-line text header + raw CSIB binary | Legacy measurement path | -->
+| `.dat` | `<file_id>_<rangingMode>_<MMDD-HHmm>.dat` | Raw bytes as received on 0xFF04 | File-stream transfer |
 | `.csv` | `<same-base-as-.bin>.csv` | Commented CSV export of a `.bin` file | Export button |
 
 **Example names:**
@@ -405,29 +407,28 @@ measurement_20260519_143201_042.csv
 
 ### `MeasurementRepository` Public API
 
-| Method | Returns | Description |
-|---|---|---|
-| `saveMeasurement(data)` | `String` (path) | Writes 4-line header + raw CSIB as `.bin` |
-| `saveDatFile(fileId, data)` | `File` | Writes raw bytes as `<id>_<DD-HH-mm>.dat` |
-| `exportToCsv(binFile, onError)` | `File?` | Parses CSIB `.bin`, writes commented `.csv` |
-| `listFiles()` | `List<File>` | All `.bin` + `.dat`, newest first |
-| `listBinFiles()` | `List<File>` | Only `.bin` files (for CSIB-aware features) |
-| `deleteLastFile()` | `Boolean` | Deletes the newest file (bin or dat) |
-| `deleteAllFiles()` | `Int` | Deletes all `.bin`, `.dat`, `.csv`; returns count |
+| Method                                   | Returns | Description                                       |
+|------------------------------------------|---|---------------------------------------------------|
+| `saveMeasurement(rangingMode, data)`     | `String` (path) | Writes 4-line header + raw CSIB as `1_*.dat`      |
+| `saveDatFile(fileId, rangingMode, data)` | `File` | Writes raw bytes as `<id>_<MMDD-HHmm>.dat`        |
+| `exportToCsv(compactDatFile, onError)`   | `File?` | Parses CSIB `1_*.dat`, writes commented `.csv`    |
+| `listFiles()`                            | `List<File>` | All `.txt` + `.dat`, newest first                 |
+| `listCompactDatFiles()`                  | `List<File>` | Only `1_*.dat` files (for CSIB-aware features)    |
+| `deleteLastFile()`                       | `Boolean` | Deletes the newest file (txt or dat)              |
+| `deleteAllFiles()`                       | `Int` | Deletes all `.txt`, `.dat`, `.csv`; returns count |
 
 ### CSV Format
 
 ```csv
 # ESP32-C6 Beacon Measurement Export
-# Source file : measurement_20260519_143201_042.bin
-# Export time : 2026-05-19 14:32:05
+# Source file : 1_1914-3201_042.dat
+# Export time : 2026-06-16 14:32:05
 # CSIB version: 1
 # Record count: 1200
 # Session start (esp_timer µs): 4823910234
 # ---
 # Columns:
 #   seq             - Measurement sequence number
-#   timestamp_ms    - ms since session start
 #   dist_raw_m      - Raw ToF distance (metres)
 #   dist_filtered_m - Kalman-filtered distance (metres)
 #   variance        - Kalman P covariance
@@ -436,10 +437,15 @@ measurement_20260519_143201_042.csv
 #   outlier         - 1 = rejected by 3σ gate, 0 = accepted
 #   valid           - 1 = raw measurement valid, 0 = invalid
 # ---
-seq,timestamp_ms,dist_raw_m,dist_filtered_m,variance,rssi_dbm,rssi_raw,outlier,valid
-0,0,1.234567,1.230012,0.000423,-40,88,0,1
-1,100,1.241230,1.231445,0.000418,-41,87,0,1
+seq,dist_raw_m,dist_filtered_m,variance,rssi_dbm,rssi_raw,outlier,valid
+0,1.234567,1.230012,0.000423,-40,88,0,1
+1,1.241230,1.231445,0.000418,-41,87,0,1
 ```
+<!-- #   timestamp_ms    - ms since session start
+,timestamp_ms
+,0
+,100
+-->
 
 Floats: 6 decimal places; non-finite values written as `NaN`.
 
@@ -563,21 +569,21 @@ A characteristic advertising both NOTIFY and INDICATE uses INDICATE
 
 ### Main Screen (`MainActivity`)
 
-| Control | Enabled when | Action |
-|---|---|---|
-| **Connect** button | Always | Starts BLE scan |
-| **Disconnect** button | Connected | Closes GATT link |
-| Connection dot (gray/yellow/green/red) | Always | Reflects `BleState` |
-| **▶ Start** | Connected | Sends CMD `0x01` |
-| **■ Stop** | Connected | Sends CMD `0x02`; triggers file transfer |
-| Beacon state pill | Always | Shows IDLE / MEASURING / ERROR |
-| **🗑 Last** | Files exist | Deletes newest `.bin` or `.dat` |
-| **🗑 All** | Files exist | Deletes all `.bin`, `.dat`, `.csv` |
-| **📈 Plot** | `.bin` file exists | Opens `PlotActivity` with newest `.bin` |
-| **⬆ Export Last as CSV** | `.bin` file exists | Parses newest `.bin` → CSV, opens share sheet |
-| File list | Always | Lists all `.bin` (📄) and `.dat` (📦) files, newest first |
-| Event log | Always | Last 30 timestamped lines, newest at top |
-| **Long-press log** | Log non-empty | Copies full log to clipboard |
+| Control | Enabled when          | Action                                                    |
+|---|-----------------------|-----------------------------------------------------------|
+| **Connect** button | Always                | Starts BLE scan                                           |
+| **Disconnect** button | Connected             | Closes GATT link                                          |
+| Connection dot (gray/yellow/green/red) | Always                | Reflects `BleState`                                       |
+| **▶ Start** | Connected             | Sends CMD `0x01`                                          |
+| **■ Stop** | Connected             | Sends CMD `0x02`; triggers file transfer                  |
+| Beacon state pill | Always                | Shows IDLE / MEASURING / ERROR                            |
+| **🗑 Last** | Files exist           | Deletes newest `.txt` or `.dat`                           |
+| **🗑 All** | Files exist           | Deletes all `.txt`, `.dat`, `.csv`                        |
+| **📈 Plot** | `1_*.dat` file exists | Opens `PlotActivity` with newest `1_*.dat`                |
+| **⬆ Export Last as CSV** | `1_.dat` file exists  | Parses newest `1_*.dat` → CSV, opens share sheet          |
+| File list | Always                | Lists all `.txt` (📄) and `.dat` (📦) files, newest first |
+| Event log | Always                | Last 30 timestamped lines, newest at top                  |
+| **Long-press log** | Log non-empty         | Copies full log to clipboard                              |
 
 ### Connection Status Dot
 
@@ -598,12 +604,12 @@ A characteristic advertising both NOTIFY and INDICATE uses INDICATE
 
 ### File List Icons
 
-| Icon | Type | Created by |
-|---|---|---|
-| 📄 | `.bin` | Legacy measurement path |
-| 📦 | `.dat` | 0xFF04 file-stream transfer |
+| Icon | Type   | Created by                     |
+|---|--------|--------------------------------|
+| 📄 | `.txt` | Measurement status description |
+| 📦 | `.dat` | 0xFF04 file-stream transfer    |
 
-Plot and Export CSV are disabled when no `.bin` file exists — both features
+Plot and Export CSV are disabled when no `1_*.dat` file exists — both features
 require CSIB format parsing. Delete and file count reflect all file types.
 
 ---
@@ -614,9 +620,9 @@ require CSIB format parsing. Delete and file count reflect all file types.
 
 ### Data Loading
 
-A `.bin` file is either:
+A `.dat` file is either:
 - **Pre-loaded** via `EXTRA_FILE_PATH` intent extra (passed by MainActivity
-  with the most recent `.bin`)
+  with the most recent `1_*.dat`)
 - **Loaded from the internal store** via the file spinner + Load button
 - **Loaded from any file manager app** via the "Open file from storage…"
   button (`GetContent` contract, copied to a temp file for random-access
@@ -662,7 +668,7 @@ Triggered by **⬆ Export Last as CSV** in `MainActivity`.
 
 ### Steps
 
-1. `listBinFiles().firstOrNull()` — picks the most recent `.bin`
+1. `listCompactDatFiles().firstOrNull()` — picks the most recent `1_*.dat`
 2. File I/O + CSIB parse runs on a background `Thread` to avoid blocking the UI
 3. `MeasurementRepository.exportToCsv()`:
    a. Reads all bytes; scans past `#` comment lines to locate CSIB magic
@@ -673,7 +679,7 @@ Triggered by **⬆ Export Last as CSV** in `MainActivity`.
 4. On success, `FileProvider.getUriForFile()` produces a content URI and
    `Intent.ACTION_SEND` (type `text/csv`) opens the system share sheet
 
-The `.csv` file is not shown in the main file list (only `.bin` and `.dat`
+The `.csv` file is not shown in the main file list (only `.txt` and `.dat`
 appear) but is accessible via the share sheet or ADB.
 
 ---
@@ -812,7 +818,7 @@ on service-discovery failure.
 MainActivity
 ├── BleManager              Scan, GATT lifecycle, CCCD queue, command writes
 │   └── FileStreamParser    0xFF04 indication decoder; file reassembly state machine
-└── MeasurementRepository   .bin save, .dat save, CSIB parse, CSV export
+└── MeasurementRepository   .txt save, .dat save, CSIB parse, CSV export
 
 PlotActivity
 ├── CsibParser              Binary parse + 100 ms aggregation
@@ -827,7 +833,7 @@ ChartMarkerView             Tap-to-inspect popup for the chart
 |---|---|
 | **Main (UI)** | All view updates; `connectGatt`; command writes; `fileStreamParser.reset()` |
 | **GATT callback (Binder)** | All `onXxx` GATT callbacks; `FileStreamParser.feed()` calls |
-| **Worker (`Thread{}`)** | CSV export (file I/O + CSIB parse in `exportLastBinAsCsv`) |
+| **Worker (`Thread{}`)** | CSV export (file I/O + CSIB parse in `exportLastDatAsCsv`) |
 
 Every `BleManager` callback (`onStateChanged`, `onBeaconStatus`,
 `onFileReceived`, `onTransferComplete`) is invoked on the GATT Binder thread.

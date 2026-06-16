@@ -1,4 +1,4 @@
-package com.lumais.blewfcsiram.ble
+package com.lumais.blewrama.ble
 
 import java.io.ByteArrayOutputStream
 
